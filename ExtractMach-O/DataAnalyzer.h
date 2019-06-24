@@ -13,8 +13,10 @@ NS_ASSUME_NONNULL_BEGIN
 @interface ClassWrapper : NSObject
 
 @property(nonatomic, copy) NSString *className;
+
 @property(nonatomic, assign) BOOL isEmpty; //没IvarLayout BaseMethods BaseProtocols WeakIvarLayout baseProperties
 @property(nonatomic, assign) BOOL isUsed;
+@property(nonatomic, strong) NSMutableArray<NSString *> *propertyNames; //存 baseProperties
 @property(nonatomic, strong) NSMutableArray<ClassWrapper *> *childClassWrappers;
 
 @end
@@ -28,8 +30,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface MethodWrapper : NSObject
 
-@property(nonatomic, copy) NSString *name;
+@property(nonatomic, copy) NSString *methodName;
 @property(nonatomic, copy) NSString *detailName; //[Student hello]
+@property(nonatomic, copy) NSString *className;
 
 @end
 

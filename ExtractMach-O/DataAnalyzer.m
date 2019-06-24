@@ -36,6 +36,8 @@ static NSString * const EmptyData = @"0x0";
 @property(nonatomic, copy) NSString *dataSegmentPath;
 @property(nonatomic, copy) NSString *methodRefsPath;
 
+@property(nonatomic, strong) ClassInfoDataStruct *classInfoDataStruct;
+
 @end
 
 @implementation DataAnalyzer
@@ -57,8 +59,11 @@ static NSString * const EmptyData = @"0x0";
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString *dataSegmentString = [NSString stringWithContentsOfFile:self.dataSegmentPath encoding:NSUTF8StringEncoding error:nil];
+        self.classInfoDataStruct = [self getClassInfoDataStructWithString:dataSegmentString];
+
         NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithDataSegmentString:dataSegmentString];
         NSArray<NSString *> *unusedMethods =[self getUnusedMethodsWithDataSegmentString:dataSegmentString];
+        
         UnusedDataStruct *unusedDataStruct = [[UnusedDataStruct alloc] init];
         unusedDataStruct.unusedClasses = unusedClasses;
         unusedDataStruct.unusedMethods = unusedMethods;
@@ -70,9 +75,7 @@ static NSString * const EmptyData = @"0x0";
 
 -  (NSArray<ClassWrapper *> *)getUnusedClassesWithDataSegmentString:(NSString *)dataSegmentString {
     NSSet<NSString *> *classrefs = [self getClassrefsWithString:dataSegmentString];
-    ClassInfoDataStruct *classInfoDataStruct = [self getClassInfoDataStructWithString:dataSegmentString];
-   
-    NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithClassInfoDataStruct:classInfoDataStruct classrefs:classrefs];
+    NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithClassrefs:classrefs];
     
     return unusedClasses;
 }
@@ -82,14 +85,29 @@ static NSString * const EmptyData = @"0x0";
     NSSet<NSString *> *selrefs = [self getMethodRefs];
     NSArray<MethodWrapper *> *methodWrappers = [self getAllMethodsWithDataSegmentString:dataSegmentString];
     [methodWrappers enumerateObjectsUsingBlock:^(MethodWrapper * _Nonnull methodWrapper, NSUInteger idx, BOOL * _Nonnull stop) {
-        if ([selrefs containsObject:methodWrapper.name]) {
+        if ([selrefs containsObject:methodWrapper.methodName]) {
             return;
         }
         
-        //majiakun 过滤set方法
-        if ([methodWrapper.name hasPrefix:@"set"] || [methodWrapper.name hasSuffix:@":"]) {
+        //过滤set get方法
+        NSString *propertyName = methodWrapper.methodName;
+        if ([methodWrapper.methodName hasPrefix:@"set"] || [methodWrapper.methodName hasSuffix:@":"]) {
+            propertyName = [propertyName stringByReplacingOccurrencesOfString:@"set" withString:@""];
+            propertyName = [propertyName stringByReplacingOccurrencesOfString:@":" withString:@""];
+            //第一个字母需要小写
+            NSString *firstName = [[propertyName substringToIndex:1] lowercaseString];
+            if ([propertyName length] < 2) {
+                propertyName = firstName;
+            } else {
+                propertyName = [NSString stringWithFormat:@"%@%@", firstName, [propertyName substringFromIndex:1]];
+            }
+        }
+
+        ClassWrapper *classWrapper = [self.classInfoDataStruct.classWrapperMap objectForKey:methodWrapper.className];
+        if ([classWrapper.propertyNames containsObject:propertyName]) {
             return;
         }
+        //过滤set get方法 end
         
         //majiakun
         if (([methodWrapper.detailName hasPrefix:@"+[WM"] && ![methodWrapper.detailName hasPrefix:@"+[WMSM"]) ||
@@ -112,7 +130,7 @@ static NSString * const EmptyData = @"0x0";
     NSRange endRange = [infosString rangeOfString:@"Contents of" options:NSCaseInsensitiveSearch];
     infosString = [infosString substringToIndex:endRange.location];
     infosString = [infosString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    NSArray<NSString *> *infos = [infosString componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
+    NSArray<NSString *> *lines = [infosString componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
     
     //只保存当前的class name不保存super的 保证同一个pod的class一块
     NSMutableArray<NSString *> *classNames = @[].mutableCopy;
@@ -121,11 +139,12 @@ static NSString * const EmptyData = @"0x0";
     __block ClassWrapper *classWrapper = nil;
     __block ClassWrapper *superClassWrapper = nil;
     __block BOOL isEmpty = YES;
-    [infos enumerateObjectsUsingBlock:^(NSString * _Nonnull info, NSUInteger idx, BOOL * _Nonnull stop) {
-        info = [info stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if ([info containsString:@"_OBJC_CLASS_$_"]) { //
-            NSString *className = [[[info componentsSeparatedByString:@" "] lastObject] stringByReplacingOccurrencesOfString:@"_OBJC_CLASS_$_" withString:@""];
-            if (![info containsString:@"superclass"]) { //以包含_OBJC_CLASS_$_但不包含superclass 来划分class
+    __block BOOL analyzeBasePropertiesing = NO;
+    [lines enumerateObjectsUsingBlock:^(NSString * _Nonnull line, NSUInteger idx, BOOL * _Nonnull stop) {
+        line = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([line containsString:@"_OBJC_CLASS_$_"]) { //
+            NSString *className = [[[line componentsSeparatedByString:@" "] lastObject] stringByReplacingOccurrencesOfString:@"_OBJC_CLASS_$_" withString:@""];
+            if (![line containsString:@"superclass"]) { //以包含_OBJC_CLASS_$_但不包含superclass 来划分class
                 //处理上一个的 classWrapper
                 classWrapper.isEmpty = isEmpty;
                 isEmpty = YES;
@@ -158,13 +177,32 @@ static NSString * const EmptyData = @"0x0";
         }
         
         //class 和 meta class 都有描述
-        if (isEmpty && ([info containsString:@"ivarLayout"] ||
-                        [info containsString:@"baseMethods"] ||
-                        [info containsString:@"baseProtocols"] ||
-                        [info containsString:@"weakIvarLayout"] ||
-                        [info containsString:@"baseProperties"])) {
+        if (isEmpty && ([line containsString:@"ivarLayout"] ||
+                        [line containsString:@"baseMethods"] ||
+                        [line containsString:@"baseProtocols"] ||
+                        [line containsString:@"weakIvarLayout"] ||
+                        [line containsString:@"baseProperties"])) {
             //比如 baseMethods 0x0 (struct method_list_t *)
-            isEmpty = [[[info componentsSeparatedByString:@" "] objectAtIndex:1] isEqualToString:EmptyData];
+            isEmpty = [[[line componentsSeparatedByString:@" "] objectAtIndex:1] isEqualToString:EmptyData];
+        }
+        
+        if ([line containsString:@"baseProperties"]) {
+            analyzeBasePropertiesing = YES;
+            classWrapper.propertyNames = @[].mutableCopy;
+        }
+      
+        //处理baseProperties
+        if ([line containsString:@"baseProperties"]) {
+            
+        }
+        if ([line containsString:@"Meta Class"]) {
+            analyzeBasePropertiesing = NO;
+        }
+        
+        if (analyzeBasePropertiesing && [line containsString:@"name"]) {
+            line = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            NSString *propertyName = [[line componentsSeparatedByString:@" "] lastObject];
+            [classWrapper.propertyNames addObject:propertyName];
         }
     }];
     
@@ -213,10 +251,10 @@ static NSString * const EmptyData = @"0x0";
     return isContain;
 }
 
--  (NSArray<ClassWrapper *> *)getUnusedClassesWithClassInfoDataStruct:(ClassInfoDataStruct *)classInfoDataStruct classrefs:(NSSet<NSString *> *)classrefs {
+-  (NSArray<ClassWrapper *> *)getUnusedClassesWithClassrefs:(NSSet<NSString *> *)classrefs {
     NSMutableArray<ClassWrapper *> *exceptClasses = @[].mutableCopy;
-    [classInfoDataStruct.classNames enumerateObjectsUsingBlock:^(NSString * _Nonnull className, NSUInteger idx, BOOL * _Nonnull stop) {
-        ClassWrapper *classWrapper = [classInfoDataStruct.classWrapperMap objectForKey:className];
+    [self.classInfoDataStruct.classNames enumerateObjectsUsingBlock:^(NSString * _Nonnull className, NSUInteger idx, BOOL * _Nonnull stop) {
+        ClassWrapper *classWrapper = [self.classInfoDataStruct.classWrapperMap objectForKey:className];
         if ([classrefs containsObject:classWrapper.className] || [self judgeChildrenOfClassWrapper:classWrapper inClassrefs:classrefs]) {
             classWrapper.isUsed = YES;
             
@@ -272,12 +310,14 @@ static NSString * const EmptyData = @"0x0";
         NSString *detailName = [[line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] stringByReplacingOccurrencesOfString:@"imp " withString:@""];
         
         NSString *result = [detailName stringByReplacingOccurrencesOfString:@"+[" withString:@""];
-        result = [detailName stringByReplacingOccurrencesOfString:@"-[" withString:@""];
-        result = [detailName stringByReplacingOccurrencesOfString:@"]" withString:@""];
+        result = [result stringByReplacingOccurrencesOfString:@"-[" withString:@""];
+        result = [result stringByReplacingOccurrencesOfString:@"]" withString:@""];
+        NSArray<NSString *> *names = [result componentsSeparatedByString:@" "];
         
         MethodWrapper *methodWrapper = [[MethodWrapper alloc] init];
+        methodWrapper.methodName = [names lastObject];
         methodWrapper.detailName = detailName;
-        methodWrapper.name = [[result componentsSeparatedByString:@" "] lastObject];
+        methodWrapper.className = [names firstObject];
         
         [methodWrappers addObject:methodWrapper];
     }];
