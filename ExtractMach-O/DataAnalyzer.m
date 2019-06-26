@@ -36,8 +36,6 @@ static NSString * const EmptyData = @"0x0";
 @property(nonatomic, copy) NSString *dataSegmentPath;
 @property(nonatomic, copy) NSString *methodRefsPath;
 
-@property(nonatomic, strong) ClassInfoDataStruct *classInfoDataStruct;
-
 @end
 
 @implementation DataAnalyzer
@@ -59,10 +57,12 @@ static NSString * const EmptyData = @"0x0";
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString *dataSegmentString = [NSString stringWithContentsOfFile:self.dataSegmentPath encoding:NSUTF8StringEncoding error:nil];
-        self.classInfoDataStruct = [self getClassInfoDataStructWithString:dataSegmentString];
-
-        NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithDataSegmentString:dataSegmentString];
-        NSArray<NSString *> *unusedMethods =[self getUnusedMethodsWithDataSegmentString:dataSegmentString];
+        ClassInfoDataStruct *classInfoDataStruct = [self getClassInfoDataStructWithString:dataSegmentString];
+        
+        NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithDataSegmentString:dataSegmentString classInfoDataStruct:classInfoDataStruct];
+        NSArray<NSString *> *unusedMethods =[self getUnusedMethodsWithDataSegmentString:dataSegmentString classInfoDataStruct:classInfoDataStruct];
+        
+        classInfoDataStruct = nil;
         
         UnusedDataStruct *unusedDataStruct = [[UnusedDataStruct alloc] init];
         unusedDataStruct.unusedClasses = unusedClasses;
@@ -73,14 +73,14 @@ static NSString * const EmptyData = @"0x0";
     });
 }
 
--  (NSArray<ClassWrapper *> *)getUnusedClassesWithDataSegmentString:(NSString *)dataSegmentString {
+-  (NSArray<ClassWrapper *> *)getUnusedClassesWithDataSegmentString:(NSString *)dataSegmentString classInfoDataStruct:(ClassInfoDataStruct *)classInfoDataStruct {
     NSSet<NSString *> *classrefs = [self getClassrefsWithString:dataSegmentString];
-    NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithClassrefs:classrefs];
+    NSArray<ClassWrapper *> *unusedClasses = [self getUnusedClassesWithClassrefs:classrefs classInfoDataStruct:classInfoDataStruct];
     
     return unusedClasses;
 }
 
--  (NSArray<NSString *> *)getUnusedMethodsWithDataSegmentString:(NSString *)dataSegmentString {
+-  (NSArray<NSString *> *)getUnusedMethodsWithDataSegmentString:(NSString *)dataSegmentString classInfoDataStruct:(ClassInfoDataStruct *)classInfoDataStruct {
     NSMutableArray<NSString *> *unusedMethods = @[].mutableCopy;
     NSSet<NSString *> *selrefs = [self getMethodRefs];
     NSArray<MethodWrapper *> *methodWrappers = [self getAllMethodsWithDataSegmentString:dataSegmentString];
@@ -89,29 +89,38 @@ static NSString * const EmptyData = @"0x0";
             return;
         }
         
-        //过滤set get方法
+        //set get方法
+        ClassWrapper *classWrapper = [classInfoDataStruct.classWrapperMap objectForKey:methodWrapper.className];
         NSString *propertyName = methodWrapper.methodName;
-        if ([methodWrapper.methodName hasPrefix:@"set"] || [methodWrapper.methodName hasSuffix:@":"]) {
+        NSString *specialPropertyName = nil; //大写字母开头的属性
+        if ([methodWrapper.methodName hasPrefix:@"set"] && [methodWrapper.methodName hasSuffix:@":"]) {
             propertyName = [propertyName stringByReplacingOccurrencesOfString:@"set" withString:@""];
             propertyName = [propertyName stringByReplacingOccurrencesOfString:@":" withString:@""];
-            //第一个字母需要小写
-            NSString *firstName = [[propertyName substringToIndex:1] lowercaseString];
-            if ([propertyName length] < 2) {
-                propertyName = firstName;
-            } else {
-                propertyName = [NSString stringWithFormat:@"%@%@", firstName, [propertyName substringFromIndex:1]];
+            specialPropertyName = propertyName;
+            //处理小写字母开头的属性
+            if ([propertyName length] >= 1) {
+                NSString *firstName = [[propertyName substringToIndex:1] lowercaseString];
+                if ([propertyName length] < 2) {
+                    propertyName = firstName;
+                } else {
+                    propertyName = [NSString stringWithFormat:@"%@%@", firstName, [propertyName substringFromIndex:1]];
+                }
             }
         }
-
-        ClassWrapper *classWrapper = [self.classInfoDataStruct.classWrapperMap objectForKey:methodWrapper.className];
-        if ([classWrapper.propertyNames containsObject:propertyName]) {
+        
+        BOOL isProperty = [classWrapper.propertyNames containsObject:propertyName] || [classWrapper.propertyNames containsObject:specialPropertyName];
+        if (self.methodCategory == MethodCategoryExcludeSettrAndGetter && isProperty) {//过滤掉set get方法
+            return;
+        } else if (self.methodCategory == MethodCategorySettrAndGetter && !isProperty) {//只保留set get 方法
             return;
         }
-        //过滤set get方法 end
+
+        if (!self.filterBlock) {
+            [unusedMethods addObject:methodWrapper.detailName];
+            return;
+        }
         
-        //majiakun
-        if (([methodWrapper.detailName hasPrefix:@"+[WM"] && ![methodWrapper.detailName hasPrefix:@"+[WMSM"]) ||
-            ([methodWrapper.detailName hasPrefix:@"-[WM"] && ![methodWrapper.detailName hasPrefix:@"-[WMSM"])) {
+        if (self.filterBlock(methodWrapper.className)) {
             [unusedMethods addObject:methodWrapper.detailName];
         }
     }];
@@ -148,7 +157,7 @@ static NSString * const EmptyData = @"0x0";
                 //处理上一个的 classWrapper
                 classWrapper.isEmpty = isEmpty;
                 isEmpty = YES;
-    
+                
                 //当前的
                 [classNames addObject:className];
                 classWrapper = [classWrapperMap objectForKey:className];
@@ -190,7 +199,7 @@ static NSString * const EmptyData = @"0x0";
             analyzeBasePropertiesing = YES;
             classWrapper.propertyNames = @[].mutableCopy;
         }
-      
+        
         //处理baseProperties
         if ([line containsString:@"baseProperties"]) {
             
@@ -251,10 +260,10 @@ static NSString * const EmptyData = @"0x0";
     return isContain;
 }
 
--  (NSArray<ClassWrapper *> *)getUnusedClassesWithClassrefs:(NSSet<NSString *> *)classrefs {
+-  (NSArray<ClassWrapper *> *)getUnusedClassesWithClassrefs:(NSSet<NSString *> *)classrefs classInfoDataStruct:(ClassInfoDataStruct *)classInfoDataStruct {
     NSMutableArray<ClassWrapper *> *exceptClasses = @[].mutableCopy;
-    [self.classInfoDataStruct.classNames enumerateObjectsUsingBlock:^(NSString * _Nonnull className, NSUInteger idx, BOOL * _Nonnull stop) {
-        ClassWrapper *classWrapper = [self.classInfoDataStruct.classWrapperMap objectForKey:className];
+    [classInfoDataStruct.classNames enumerateObjectsUsingBlock:^(NSString * _Nonnull className, NSUInteger idx, BOOL * _Nonnull stop) {
+        ClassWrapper *classWrapper = [classInfoDataStruct.classWrapperMap objectForKey:className];
         if ([classrefs containsObject:classWrapper.className] || [self judgeChildrenOfClassWrapper:classWrapper inClassrefs:classrefs]) {
             classWrapper.isUsed = YES;
             
@@ -265,8 +274,12 @@ static NSString * const EmptyData = @"0x0";
             return;
         }
         
-        //majiakun
-        if (([classWrapper.className hasPrefix:@"WM"] && ![classWrapper.className hasPrefix:@"WMSM"]) || [classWrapper.className hasPrefix:@"PA"] || [classWrapper.className hasPrefix:@"SAT"]) {
+        if (!self.filterBlock) {
+            [exceptClasses addObject:classWrapper];
+            return;
+        }
+        
+        if (self.filterBlock(classWrapper.className)) {
             [exceptClasses addObject:classWrapper];
         }
     }];
@@ -283,7 +296,7 @@ static NSString * const EmptyData = @"0x0";
         if (![line containsString:methodDescripation]) {
             return;
         }
-    
+        
         NSString *methodRef = [[[line componentsSeparatedByString:@"  "] lastObject] stringByReplacingOccurrencesOfString:methodDescripation withString:@""];
         [methodRefs addObject:methodRef];
     }];
@@ -301,7 +314,7 @@ static NSString * const EmptyData = @"0x0";
         if (![line containsString:classMethodPre] && ![line containsString:instanceMethodPre]) {
             return;
         }
-    
+        
         //过滤掉.cxx_destruct
         if ([line containsString:@".cxx_destruct"]) {
             return;

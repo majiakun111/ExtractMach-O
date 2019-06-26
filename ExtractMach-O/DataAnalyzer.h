@@ -10,6 +10,15 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+typedef NS_ENUM(NSInteger, MethodCategory) {
+    MethodCategoryeUnknow = -1,
+    
+    MethodCategoryExcludeSettrAndGetter = 0,
+    MethodCategorySettrAndGetter = 1,
+    
+    MethodCategoryAll,
+};
+
 @interface ClassWrapper : NSObject
 
 @property(nonatomic, copy) NSString *className;
@@ -44,6 +53,9 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @interface DataAnalyzer : NSObject
+
+@property(nonatomic, copy) BOOL (^filterBlock)(NSString *className);//YES 保留
+@property(nonatomic, assign) MethodCategory methodCategory;
 
 - (instancetype)initWithDataSegmentPath:(NSString *)dataSegmentPath methodRefsPath:(NSString *)methodRefsPath NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
