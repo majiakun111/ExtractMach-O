@@ -13,8 +13,8 @@ static NSString * const EmptyData = @"0x0";
 @implementation ClassWrapper
 
 - (NSString *)description {
-    return [NSString stringWithFormat:@"className:%@, isUsed:%@, isEmpty:%@", self.className, self.isUsed ? @"YES" : @"NO", self.isEmpty ? @"YES" : @"NO"];
-    //return [NSString stringWithFormat:@"%@", self.className];
+    //return [NSString stringWithFormat:@"className:%@, isUsed:%@, isEmpty:%@", self.className, self.isUsed ? @"YES" : @"NO", self.isEmpty ? @"YES" : @"NO"];
+    return [NSString stringWithFormat:@"%@", self.className];
 }
 
 @end
@@ -93,20 +93,20 @@ static NSString * const EmptyData = @"0x0";
         ClassWrapper *classWrapper = [classInfoDataStruct.classWrapperMap objectForKey:methodWrapper.className];
         NSString *propertyName = methodWrapper.methodName;
         NSString *specialPropertyName = nil; //大写字母开头的属性
-        if ([methodWrapper.methodName hasPrefix:@"set"] && [methodWrapper.methodName hasSuffix:@":"]) {
-            propertyName = [propertyName stringByReplacingOccurrencesOfString:@"set" withString:@""];
-            propertyName = [propertyName stringByReplacingOccurrencesOfString:@":" withString:@""];
-            specialPropertyName = propertyName;
-            //处理小写字母开头的属性
-            if ([propertyName length] >= 1) {
-                NSString *firstName = [[propertyName substringToIndex:1] lowercaseString];
-                if ([propertyName length] < 2) {
-                    propertyName = firstName;
-                } else {
-                    propertyName = [NSString stringWithFormat:@"%@%@", firstName, [propertyName substringFromIndex:1]];
-                }
-            }
-        }
+//        if ([methodWrapper.methodName hasPrefix:@"set"] && [methodWrapper.methodName hasSuffix:@":"]) {
+//            propertyName = [propertyName stringByReplacingOccurrencesOfString:@"set" withString:@""];
+//            propertyName = [propertyName stringByReplacingOccurrencesOfString:@":" withString:@""];
+//            specialPropertyName = propertyName;
+//            //处理小写字母开头的属性
+//            if ([propertyName length] >= 1) {
+//                NSString *firstName = [[propertyName substringToIndex:1] lowercaseString];
+//                if ([propertyName length] < 2) {
+//                    propertyName = firstName;
+//                } else {
+//                    propertyName = [NSString stringWithFormat:@"%@%@", firstName, [propertyName substringFromIndex:1]];
+//                }
+//            }
+//        }
         
         BOOL isProperty = [classWrapper.propertyNames containsObject:propertyName] || [classWrapper.propertyNames containsObject:specialPropertyName];
         if (self.methodCategory == MethodCategoryExcludeSettrAndGetter && isProperty) {//过滤掉set get方法
@@ -291,7 +291,7 @@ static NSString * const EmptyData = @"0x0";
     NSString *methodRefsString = [NSString stringWithContentsOfFile:self.methodRefsPath encoding:NSUTF8StringEncoding error:nil];
     NSArray<NSString *> *lines = [methodRefsString componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
     NSMutableSet<NSString *> *methodRefs = [[NSMutableSet alloc] init];
-    NSString *methodDescripation = @"__TEXT:__objc_methname:";
+    NSString *methodDescripation = @"__RODATA:__objc_methname:";
     [lines enumerateObjectsUsingBlock:^(NSString * _Nonnull line, NSUInteger idx, BOOL * _Nonnull stop) {
         if (![line containsString:methodDescripation]) {
             return;
@@ -308,10 +308,9 @@ static NSString * const EmptyData = @"0x0";
     NSMutableArray<MethodWrapper *> *methodWrappers = @[].mutableCopy;
     
     NSArray<NSString *> *lines = [dataSegmentString componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-    NSString *classMethodPre = @"imp +[";
-    NSString *instanceMethodPre = @"imp -[";
+    NSString *methodPre = @"imp";
     [lines enumerateObjectsUsingBlock:^(NSString * _Nonnull line, NSUInteger idx, BOOL * _Nonnull stop) {
-        if (![line containsString:classMethodPre] && ![line containsString:instanceMethodPre]) {
+        if (![line containsString:methodPre]) {
             return;
         }
         
@@ -320,7 +319,10 @@ static NSString * const EmptyData = @"0x0";
             return;
         }
         
-        NSString *detailName = [[line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] stringByReplacingOccurrencesOfString:@"imp " withString:@""];
+        NSString *methodName = [[line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] stringByReplacingOccurrencesOfString:@"imp " withString:@""];
+        
+        NSRange rangeOfSpace = [methodName rangeOfString:@" "];
+        NSString *detailName = rangeOfSpace.location == NSNotFound ? nil :[methodName substringFromIndex:rangeOfSpace.location + 1];
         
         NSString *result = [detailName stringByReplacingOccurrencesOfString:@"+[" withString:@""];
         result = [result stringByReplacingOccurrencesOfString:@"-[" withString:@""];

@@ -22,7 +22,7 @@
     // Do any additional setup after loading the view, typically from a nib.
 
     self.dataAnalyzer = [[DataAnalyzer alloc] initWithDataSegmentPath:[[NSBundle mainBundle] pathForResource:@"dataSegment" ofType:@"txt"] methodRefsPath:[[NSBundle mainBundle] pathForResource:@"methodRefs" ofType:@"txt"]];
-    [self.dataAnalyzer setMethodCategory:MethodCategorySettrAndGetter];
+    [self.dataAnalyzer setMethodCategory:MethodCategoryExcludeSettrAndGetter];
     [self.dataAnalyzer setFilterBlock:^BOOL(NSString * _Nonnull className) {
         if ([className hasPrefix:@"WMSM"] || [className hasPrefix:@"WMMRN"] || [className hasPrefix:@"WMRN"]) {
             return NO;
